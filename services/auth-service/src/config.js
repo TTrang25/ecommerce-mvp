@@ -19,4 +19,15 @@ module.exports = {
     secret: required('JWT_SECRET'),
     expiresInSec: Number(process.env.JWT_EXPIRES_IN_SEC || 3600),
   },
+  kafka: {
+    brokers: (process.env.KAFKA_BROKERS || 'localhost:29092').split(','),
+  },
+  outbox: {
+    intervalMs: Number(process.env.OUTBOX_INTERVAL_MS || 1000),
+  },
+  admin: {
+    username: process.env.ADMIN_USERNAME,
+    password: process.env.ADMIN_PASSWORD,
+    email: process.env.ADMIN_EMAIL || 'admin@example.com',
+  },
 };

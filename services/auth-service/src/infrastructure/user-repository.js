@@ -58,4 +58,24 @@ async function createCustomerWithEvent({ username, passwordHash, email, phone })
   }
 }
 
-module.exports = { findByUsername, createCustomerWithEvent };
+// Tạo user theo tên role (dùng cho Admin/Shipment Staff), không phát event
+async function createUserWithRoleName({ username, passwordHash, email, phone, roleName }) {
+  try {
+    const { rows } = await pool.query(
+      `INSERT INTO users (username, password, email, phone, roleid)
+       SELECT $1, $2, $3, $4, roleid FROM roles WHERE rolename = $5
+       RETURNING uid`,
+      [username, passwordHash, email, phone, roleName]
+    );
+    if (!rows[0]) throw new Error(`Role ${roleName} not found`);
+    return rows[0].uid;
+  } catch (err) {
+    if (err.code === '23505') {
+      if (err.constraint === 'users_email_key') throw new ConflictError('Email already exists');
+      throw new ConflictError('Username already exists');
+    }
+    throw err;
+  }
+}
+
+module.exports = { findByUsername, createCustomerWithEvent, createUserWithRoleName };
