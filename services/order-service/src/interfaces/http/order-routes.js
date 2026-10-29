@@ -4,29 +4,30 @@ function createOrderRoutes(orderService) {
   const router = express.Router();
 
   router.post('/', async (req, res, next) => {
-  try {
-    const order = await orderService.createOrder({
-    uid: Number(req.user.sub),
-    items: req.body.items
-});
+    try {
+      const order = await orderService.createOrder({
+        uid: Number(req.user.sub),
+        token: req.headers.authorization,
+        items: req.body.items
+      });
 
-    res.status(201).json(order);
-  } catch (error) {
-    next(error);
-  }
-});
+      res.status(201).json(order);
+    } catch (error) {
+      next(error);
+    }
+  });
 
   router.get('/', async (req, res, next) => {
-  try {
-    const uid = Number(req.user.sub);
+    try {
+      const uid = Number(req.user.sub);
 
-    const orders = await orderService.getOrders(uid);
+      const orders = await orderService.getOrders(uid);
 
-    res.json(orders);
-  } catch (error) {
-    next(error);
-  }
-});
+      res.json(orders);
+    } catch (error) {
+      next(error);
+    }
+  });
 
   router.get('/:oid', async (req, res, next) => {
     try {
@@ -39,9 +40,9 @@ function createOrderRoutes(orderService) {
       }
 
       const order = await orderService.getOrder(
-  oid,
-  Number(req.user.sub)
-);
+        oid,
+        Number(req.user.sub)
+      );
 
       res.json(order);
     } catch (error) {

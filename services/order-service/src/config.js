@@ -7,6 +7,9 @@ const config = {
 
   jwtSecret: process.env.JWT_SECRET,
 
+  customerServiceUrl:
+    process.env.CUSTOMER_SERVICE_URL || 'http://localhost:3002',
+
   kafka: {
     brokers: (process.env.KAFKA_BROKERS || 'localhost:29092')
       .split(','),

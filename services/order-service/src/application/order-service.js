@@ -1,10 +1,18 @@
 const { pool } = require('../infrastructure/db');
 const repository = require('../infrastructure/order-repository');
+const customerClient = require('../infrastructure/customer-client');
+const productGrpcClient = require('../grpc/product-grpc-client');
 
 async function createOrder(data) {
   if (!data.uid) {
     const error = new Error('uid is required');
     error.statusCode = 400;
+    throw error;
+  }
+
+  if (!data.token) {
+    const error = new Error('Authorization token is required');
+    error.statusCode = 401;
     throw error;
   }
 
@@ -14,65 +22,168 @@ async function createOrder(data) {
     throw error;
   }
 
+  const customer = await customerClient.getCustomer(
+    data.uid,
+    data.token
+  );
+
+  if (
+    !customer.membership ||
+    typeof customer.membership.score !== 'number'
+  ) {
+    const error = new Error(
+      'Customer membership information is unavailable'
+    );
+    error.statusCode = 502;
+    throw error;
+  }
+
+  const membershipScore = customer.membership.score;
+
+  console.log(
+    'Customer membership score:',
+    membershipScore
+  );
+
+  const orderItems = [];
   let subtotal = 0;
 
   for (const item of data.items) {
-    if (!Number.isInteger(item.pid) || item.pid <= 0) {
+    if (
+      !Number.isInteger(item.pid) ||
+      item.pid <= 0
+    ) {
       const error = new Error('Invalid pid');
       error.statusCode = 400;
       throw error;
     }
 
-    if (!item.pname || typeof item.pname !== 'string') {
-      const error = new Error('pname is required');
+    if (
+      !Number.isInteger(item.qty) ||
+      item.qty <= 0
+    ) {
+      const error = new Error('Invalid qty');
       error.statusCode = 400;
       throw error;
     }
 
-    if (typeof item.price !== 'number' || item.price < 0) {
-      const error = new Error('Invalid price');
-      error.statusCode = 400;
+    let product;
+
+    try {
+      product = await productGrpcClient.getProduct(
+        item.pid
+      );
+    } catch (error) {
+      console.error(
+        'GetProduct gRPC error:',
+        error
+      );
+
+      if (error.code === 5) {
+        error.statusCode = 404;
+        error.message = 'Product not found';
+      } else {
+        error.statusCode = 502;
+        error.message =
+          'Product Service is unavailable';
+      }
+
       throw error;
     }
 
-    if (!Number.isInteger(item.quantity) || item.quantity <= 0) {
-      const error = new Error('Invalid quantity');
-      error.statusCode = 400;
+    if (product.quantity < item.qty) {
+      const error = new Error(
+        `Insufficient stock for product ${item.pid}`
+      );
+      error.statusCode = 409;
       throw error;
     }
 
-    subtotal += item.price * item.quantity;
+    const price = Number(product.price);
+    const lineTotal = price * item.qty;
+
+    subtotal += lineTotal;
+
+    orderItems.push({
+      pid: product.pid,
+      pname: product.pname,
+      price,
+      quantity: item.qty,
+      lineTotal
+    });
   }
 
+  /*
+   * Discount policy will be added after
+   * the exact score -> discount rule is confirmed.
+   */
   const discountPercent = 0;
   const discountAmount = 0;
   const totalAmount = subtotal;
+
+  /*
+   * Update inventory through Product Service.
+   */
+  for (const item of orderItems) {
+    try {
+      await productGrpcClient.updateInventory(
+        item.pid,
+        item.quantity
+      );
+    } catch (error) {
+      console.error(
+        'UpdateInventory gRPC error:',
+        error
+      );
+
+      if (error.code === 5) {
+        error.statusCode = 404;
+        error.message = 'Product not found';
+      } else if (error.code === 9) {
+        error.statusCode = 409;
+        error.message = 'Insufficient stock';
+      } else {
+        error.statusCode = 502;
+        error.message =
+          'Product Service is unavailable';
+      }
+
+      throw error;
+    }
+  }
 
   const client = await pool.connect();
 
   try {
     await client.query('BEGIN');
 
-    const order = await repository.createOrder(client, {
-      uid: data.uid,
-      subtotal,
-      discountPercent,
-      discountAmount,
-      totalAmount,
-      status: 'CREATED'
-    });
+    const order = await repository.createOrder(
+      client,
+      {
+        uid: data.uid,
+        subtotal,
+        discountPercent,
+        discountAmount,
+        totalAmount,
+        status: 'CREATED'
+      }
+    );
 
     const details = [];
 
-    for (const item of data.items) {
-      const detail = await repository.createOrderDetail(client, {
-        oid: order.oid,
-        pid: item.pid,
-        pname: item.pname,
-        price: item.price,
-        quantity: item.quantity,
-        lineTotal: item.price * item.quantity
-      });
+    for (const item of orderItems) {
+      const detail =
+        await repository.createOrderDetail(
+          client,
+          {
+            oid: order.oid,
+            pid: item.pid,
+            pname: item.pname,
+            price: item.price,
+            quantity: item.quantity,
+            lineTotal: item.lineTotal
+          }
+        );
 
       details.push(detail);
     }
@@ -111,6 +222,7 @@ async function getOrder(oid, uid) {
 
   return order;
 }
+
 module.exports = {
   createOrder,
   getOrders,
