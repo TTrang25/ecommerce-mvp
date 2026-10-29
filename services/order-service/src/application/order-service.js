@@ -94,7 +94,7 @@ async function getOrders(uid) {
   return repository.findOrdersByUid(uid);
 }
 
-async function getOrder(oid) {
+async function getOrder(oid, uid) {
   const order = await repository.findOrderById(oid);
 
   if (!order) {
@@ -103,9 +103,14 @@ async function getOrder(oid) {
     throw error;
   }
 
+  if (Number(order.uid) !== Number(uid)) {
+    const error = new Error('Access denied');
+    error.statusCode = 403;
+    throw error;
+  }
+
   return order;
 }
-
 module.exports = {
   createOrder,
   getOrders,

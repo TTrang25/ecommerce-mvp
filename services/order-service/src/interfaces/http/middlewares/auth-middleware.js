@@ -13,12 +13,14 @@ function authenticateToken(req, res, next) {
   const token = authHeader.substring(7);
 
   try {
-    const payload = jwt.verify(token, config.jwtSecret);
+  const payload = jwt.verify(token, config.jwtSecret);
 
-    req.user = payload;
+  console.log('JWT payload:', payload);
 
-    next();
-  } catch (error) {
+  req.user = payload;
+
+  next();
+} catch (error) {
     return res.status(401).json({
       message: 'Invalid or expired token'
     });
