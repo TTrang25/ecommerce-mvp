@@ -1,49 +1,61 @@
-require('../config'); // đảm bảo .env đã được nạp
-const { Kafka, logLevel } = require('kafkajs');
+const config = require('../config');
+const { kafka, ensureTopics } = require('./kafka');
+const { validateUserRegisteredEvent } = require('../domain/user-registered-event');
 const { createCustomerFromEvent } = require('./customer-event-repository');
 
 const TOPIC = 'user-registered';
-const GROUP_ID = 'customer-service';
+const RETRY_MS = 5000;
 
-function parseEvent(buffer) {
-  const event = JSON.parse(buffer.toString());
-  if (!event.eventId || !Number.isInteger(event.uid) || !event.username) {
-    throw new Error('missing eventId/uid/username');
-  }
-  return event;
-}
-
-// Xử lý 1 message. Tách riêng để dễ kiểm thử.
 async function handleMessage({ message }) {
   let event;
   try {
-    event = parseEvent(message.value);
+    event = JSON.parse(message.value.toString());
   } catch (err) {
-    // Message hỏng: ghi nhận lỗi rồi bỏ qua, không retry vô hạn
-    console.error('[consumer] skip invalid message:', err.message);
+    console.warn('[consumer] skip message: invalid JSON');
     return;
   }
-  // Nếu DB lỗi, hàm này throw => KafkaJS không commit offset và sẽ giao lại
-  const processed = await createCustomerFromEvent(event);
-  console.log(
-    processed
-      ? `[consumer] processed event for uid=${event.uid}`
-      : `[consumer] duplicate event ${event.eventId}, skipped`
-  );
+
+  const problem = validateUserRegisteredEvent(event);
+  if (problem) {
+    // Event hỏng thì bỏ qua (không thử lại mãi), tránh kẹt cả hàng đợi
+    console.warn(`[consumer] skip invalid event: ${problem}`);
+    return;
+  }
+
+  // Lỗi DB sẽ được ném ra để kafkajs thử lại, không mất event
+  const result = await createCustomerFromEvent(event);
+  console.log(`[consumer] event ${event.eventId} uid=${event.uid}: ${result}`);
 }
 
-async function startUserRegisteredConsumer() {
-  const kafka = new Kafka({
-    clientId: 'customer-service',
-    brokers: (process.env.KAFKA_BROKERS || 'localhost:29092').split(','),
-    logLevel: logLevel.WARN,
-  });
-  const consumer = kafka.consumer({ groupId: GROUP_ID });
-  await consumer.connect();
-  await consumer.subscribe({ topic: TOPIC, fromBeginning: true });
-  await consumer.run({ eachMessage: handleMessage });
-  console.log(`[consumer] listening on topic "${TOPIC}"`);
-  return () => consumer.disconnect();
+// Kafka chưa sẵn sàng thì API vẫn chạy bình thường, consumer tự thử kết nối lại
+function startUserRegisteredConsumer() {
+  let stopped = false;
+  let consumer = null;
+  let timer = null;
+
+  async function run() {
+    if (stopped) return;
+    consumer = kafka.consumer({ groupId: config.kafka.groupId });
+    try {
+      await consumer.connect();
+      await ensureTopics([TOPIC]);
+      await consumer.subscribe({ topic: TOPIC, fromBeginning: true });
+      await consumer.run({ eachMessage: handleMessage });
+      console.log(`[consumer] listening on topic ${TOPIC}`);
+    } catch (err) {
+      console.error('[consumer] failed to start, will retry:', err.message);
+      await consumer.disconnect().catch(() => {});
+      if (!stopped) timer = setTimeout(run, RETRY_MS);
+    }
+  }
+
+  run();
+
+  return async function stop() {
+    stopped = true;
+    clearTimeout(timer);
+    if (consumer) await consumer.disconnect().catch(() => {});
+  };
 }
 
 module.exports = { startUserRegisteredConsumer, handleMessage };

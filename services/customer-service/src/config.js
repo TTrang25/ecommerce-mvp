@@ -18,4 +18,8 @@ module.exports = {
   jwt: {
     secret: required('JWT_SECRET'),
   },
+  kafka: {
+    brokers: (process.env.KAFKA_BROKERS || 'localhost:29092').split(','),
+    groupId: process.env.KAFKA_GROUP_ID || 'customer-service',
+  },
 };

@@ -1,40 +1,43 @@
-const dbModule = require('./db');
-const pool = dbModule.pool || dbModule;
+const { pool } = require('./db');
 
-// Tạo Customer từ sự kiện user-registered, chống xử lý trùng theo eventId.
-// Trả về true nếu tạo mới, false nếu sự kiện đã được xử lý trước đó.
-async function createCustomerFromEvent({ eventId, uid, username }) {
+const DEFAULT_MEMBERSHIP = 'BRONZE';
+
+// Xử lý event user-registered trong MỘT transaction:
+// ghi nhận eventId (chống xử lý trùng) + tạo Customer với hạng mặc định.
+// Trả về: 'created' (tạo mới) | 'exists' (Customer đã có sẵn) | 'duplicate' (event đã xử lý trước đó)
+async function createCustomerFromEvent(event) {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
 
-    // Ghi dấu "đã xử lý" trước. Nếu eventId đã có => bỏ qua, không tạo trùng.
     const seen = await client.query(
       `INSERT INTO processed_events (event_id) VALUES ($1)
        ON CONFLICT (event_id) DO NOTHING
        RETURNING event_id`,
-      [eventId]
+      [event.eventId]
     );
     if (seen.rowCount === 0) {
       await client.query('ROLLBACK');
-      return false;
+      return 'duplicate';
     }
 
-    // Hạng mặc định = hạng có score thấp nhất
-    const tier = await client.query(
-      'SELECT mid FROM memberships ORDER BY score ASC LIMIT 1'
+    const membership = await client.query(
+      'SELECT mid FROM memberships WHERE mname = $1',
+      [DEFAULT_MEMBERSHIP]
     );
-    if (!tier.rows[0]) throw new Error('No membership tiers found: schema not seeded');
+    // Nếu thiếu hạng mặc định thì báo lỗi (rollback) để event KHÔNG bị đánh dấu đã xử lý
+    if (!membership.rows[0]) {
+      throw new Error(`Default membership ${DEFAULT_MEMBERSHIP} not found`);
+    }
 
-    await client.query(
-      `INSERT INTO customers (uid, fullname, mid)
-       VALUES ($1, $2, $3)
+    const inserted = await client.query(
+      `INSERT INTO customers (uid, fullname, mid) VALUES ($1, $2, $3)
        ON CONFLICT (uid) DO NOTHING`,
-      [uid, username, tier.rows[0].mid]
+      [event.uid, event.username.trim(), membership.rows[0].mid]
     );
 
     await client.query('COMMIT');
-    return true;
+    return inserted.rowCount === 1 ? 'created' : 'exists';
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});
     throw err;
