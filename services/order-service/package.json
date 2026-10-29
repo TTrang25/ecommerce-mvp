@@ -1,0 +1,20 @@
+{
+  "name": "order-service",
+ "version": "1.0.0",
+  "description": "Order Service for ecommerce MVP",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "dotenv": "^18.0.9",
+    "express": "^5.3.0",
+    "jsonwebtoken": "^9.0.3",
+    "kafkajs": "^2.2.4",
+    "pg": "^8.16.3"
+  }
+}
