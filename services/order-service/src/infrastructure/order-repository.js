@@ -98,10 +98,31 @@ async function findOrderById(oid) {
 
   return order;
 }
+async function createOutboxEvent(client, eventData) {
+  const result = await client.query(
+    `
+    INSERT INTO outbox_events (
+      topic,
+      event_key,
+      payload
+    )
+    VALUES ($1, $2, $3)
+    RETURNING *
+    `,
+    [
+      eventData.topic,
+      eventData.eventKey,
+      eventData.payload
+    ]
+  );
+
+  return result.rows[0];
+}
 
 module.exports = {
   createOrder,
   createOrderDetail,
+  createOutboxEvent,
   findOrdersByUid,
   findOrderById
 };

@@ -157,6 +157,9 @@ async function createOrder(data) {
   try {
     await client.query('BEGIN');
 
+    /*
+     * 1. Create Order
+     */
     const order = await repository.createOrder(
       client,
       {
@@ -169,6 +172,9 @@ async function createOrder(data) {
       }
     );
 
+    /*
+     * 2. Create OrderDetail
+     */
     const details = [];
 
     for (const item of orderItems) {
@@ -188,12 +194,68 @@ async function createOrder(data) {
       details.push(detail);
     }
 
+    /*
+     * 3. Create Outbox Event
+     *
+     * Event này sẽ được Publisher đọc
+     * và gửi sang Kafka sau.
+     */
+    const outboxPayload = {
+      eventType: 'OrderCreated',
+      oid: order.oid,
+      uid: order.uid,
+      subtotal: Number(order.subtotal),
+      discountPercent: Number(order.discount_percent),
+      discountAmount: Number(order.discount_amount),
+      totalAmount: Number(order.total_amount),
+      status: order.status,
+
+      details: details.map((detail) => ({
+        odid: detail.odid,
+        pid: detail.pid,
+        pname: detail.pname,
+        price: Number(detail.price),
+        quantity: Number(detail.quantity),
+        lineTotal: Number(detail.line_total)
+      }))
+    };
+
+    console.log('>>> OUTBOX INSERT START');
+
+    const outboxEvent =
+      await repository.createOutboxEvent(
+        client,
+        {
+          topic: 'order-created',
+          eventKey: String(order.oid),
+          payload: outboxPayload
+        }
+      );
+
+    console.log(
+      '>>> OUTBOX INSERT RESULT:',
+      outboxEvent
+    );
+
+    /*
+     * 4. Commit toàn bộ transaction
+     *
+     * Order
+     * OrderDetail
+     * OutboxEvent
+     *
+     * sẽ cùng commit.
+     */
     await client.query('COMMIT');
 
     order.details = details;
 
     return order;
   } catch (error) {
+    /*
+     * Nếu Order / OrderDetail / Outbox
+     * có lỗi thì rollback toàn bộ.
+     */
     await client.query('ROLLBACK');
     throw error;
   } finally {
