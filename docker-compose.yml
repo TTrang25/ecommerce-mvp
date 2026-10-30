@@ -1,14 +1,21 @@
 name: ecommerce-mvp
 
 services:
+
+  # =========================
+  # DATABASES
+  # =========================
+
   auth-db:
     image: postgres:16-alpine
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${AUTH_DB_NAME}
-    ports: ["5433:5432"]
-    volumes: [auth-db-data:/var/lib/postgresql/data]
+    ports:
+      - "5433:5432"
+    volumes:
+      - auth-db-data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${AUTH_DB_NAME}"]
       interval: 5s
@@ -21,8 +28,10 @@ services:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${CUSTOMER_DB_NAME}
-    ports: ["5434:5432"]
-    volumes: [customer-db-data:/var/lib/postgresql/data]
+    ports:
+      - "5434:5432"
+    volumes:
+      - customer-db-data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${CUSTOMER_DB_NAME}"]
       interval: 5s
@@ -35,8 +44,10 @@ services:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${ORDER_DB_NAME}
-    ports: ["5435:5432"]
-    volumes: [order-db-data:/var/lib/postgresql/data]
+    ports:
+      - "5435:5432"
+    volumes:
+      - order-db-data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${ORDER_DB_NAME}"]
       interval: 5s
@@ -45,36 +56,65 @@ services:
 
   product-db:
     image: mongo:7
-    ports: ["27018:27017"]
-    volumes: [product-db-data:/data/db]
+    ports:
+      - "27018:27017"
+    volumes:
+      - product-db-data:/data/db
     healthcheck:
-      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      test:
+        [
+          "CMD",
+          "mongosh",
+          "--quiet",
+          "--eval",
+          "db.adminCommand('ping').ok"
+        ]
       interval: 5s
       timeout: 5s
       retries: 10
 
   shipment-db:
     image: mongo:7
-    ports: ["27019:27017"]
-    volumes: [shipment-db-data:/data/db]
+    ports:
+      - "27019:27017"
+    volumes:
+      - shipment-db-data:/data/db
     healthcheck:
-      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      test:
+        [
+          "CMD",
+          "mongosh",
+          "--quiet",
+          "--eval",
+          "db.adminCommand('ping').ok"
+        ]
       interval: 5s
       timeout: 5s
       retries: 10
 
+  # =========================
+  # REDIS
+  # =========================
+
   redis:
     image: redis:7-alpine
-    ports: ["6379:6379"]
+    ports:
+      - "6379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 3s
       retries: 10
 
+  # =========================
+  # KAFKA
+  # =========================
+
   kafka:
     image: apache/kafka:3.8.0
-    ports: ["9092:9092", "29092:29092"]
+    ports:
+      - "9092:9092"
+      - "29092:29092"
     environment:
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: broker,controller
@@ -88,11 +128,172 @@ services:
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
     healthcheck:
-      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 > /dev/null 2>&1"]
+      test:
+        [
+          "CMD-SHELL",
+          "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 > /dev/null 2>&1"
+        ]
       interval: 10s
       timeout: 10s
       retries: 12
       start_period: 15s
+
+  # =========================
+  # AUTH SERVICE
+  # =========================
+
+  auth-service:
+    build:
+      context: ./services/auth-service
+    environment:
+      PORT: 3001
+      DB_HOST: auth-db
+      DB_PORT: 5432
+      DB_USER: ${POSTGRES_USER}
+      DB_PASSWORD: ${POSTGRES_PASSWORD}
+      DB_NAME: ${AUTH_DB_NAME}
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_EXPIRES_IN_SEC: 3600
+      KAFKA_BROKERS: kafka:9092
+    ports:
+      - "3001:3001"
+    depends_on:
+      auth-db:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+
+  # =========================
+  # CUSTOMER SERVICE
+  # =========================
+
+  customer-service:
+    build:
+      context: ./services/customer-service
+    environment:
+      PORT: 3002
+      DB_HOST: customer-db
+      DB_PORT: 5432
+      DB_USER: ${POSTGRES_USER}
+      DB_PASSWORD: ${POSTGRES_PASSWORD}
+      DB_NAME: ${CUSTOMER_DB_NAME}
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_EXPIRES_IN_SEC: 3600
+      KAFKA_BROKERS: kafka:9092
+    ports:
+      - "3002:3002"
+    depends_on:
+      customer-db:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      auth-service:
+        condition: service_started
+
+  # =========================
+  # PRODUCT SERVICE
+  # =========================
+
+  product-service:
+    build:
+      context: ./services/product-service
+    environment:
+      PORT: 3003
+      MONGO_URI: mongodb://product-db:27017/${MONGO_PRODUCT_DB}
+      JWT_SECRET: ${JWT_SECRET}
+      GRPC_PORT: 50051
+    ports:
+      - "3003:3003"
+      - "50051:50051"
+    depends_on:
+      product-db:
+        condition: service_healthy
+
+  # =========================
+  # ORDER SERVICE
+  # =========================
+
+  order-service:
+    build:
+      context: ./services/order-service
+    environment:
+      PORT: 3004
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD_URL}@order-db:5432/${ORDER_DB_NAME}
+      JWT_SECRET: ${JWT_SECRET}
+      KAFKA_BROKERS: kafka:9092
+      KAFKA_CLIENT_ID: order-service
+      KAFKA_GROUP_ID: order-service-group
+      CUSTOMER_SERVICE_URL: http://customer-service:3002
+      PRODUCT_GRPC_HOST: product-service
+      PRODUCT_GRPC_PORT: 50051
+    ports:
+      - "3004:3004"
+    depends_on:
+      order-db:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      customer-service:
+        condition: service_started
+      product-service:
+        condition: service_started
+
+  # =========================
+  # SHIPMENT SERVICE
+  # =========================
+
+  shipment-service:
+    build:
+      context: ./services/shipment-service
+    environment:
+      PORT: 3005
+      MONGODB_URI: mongodb://shipment-db:27017/${MONGO_SHIPMENT_DB}
+      KAFKA_BROKERS: kafka:9092
+      KAFKA_CLIENT_ID: shipment-service
+      KAFKA_GROUP_ID: shipment-service-group
+    ports:
+      - "3005:3005"
+    depends_on:
+      shipment-db:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+
+  # =========================
+  # API GATEWAY
+  # =========================
+
+  api-gateway:
+    build:
+      context: ./services/api-gateway
+    environment:
+      PORT: 3010
+      AUTH_SERVICE_URL: http://auth-service:3001
+      JWT_SECRET: ${JWT_SECRET}
+      CUSTOMER_SERVICE_URL: http://customer-service:3002
+      PRODUCT_SERVICE_URL: http://product-service:3003
+      ORDER_SERVICE_URL: http://order-service:3004
+      SHIPMENT_SERVICE_URL: http://shipment-service:3005
+      REDIS_URL: redis://redis:6379
+    ports:
+      - "3010:3010"
+    depends_on:
+      auth-service:
+        condition: service_started
+      customer-service:
+        condition: service_started
+      product-service:
+        condition: service_started
+      order-service:
+        condition: service_started
+      shipment-service:
+        condition: service_started
+      redis:
+        condition: service_healthy
+
+# =========================
+# VOLUMES
+# =========================
 
 volumes:
   auth-db-data:
